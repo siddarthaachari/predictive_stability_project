@@ -1,48 +1,32 @@
-import numpy as np
 import pandas as pd
-
-from sklearn.metrics import mean_squared_error
-from sklearn.preprocessing import StandardScaler
+import numpy as np
 from sklearn.model_selection import train_test_split
-from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
 
 
 def load_preprocess(path):
 
+    # Load dataset
     df = pd.read_csv(path)
 
+    # Assume last column is target
     X = df.iloc[:, :-1]
     y = df.iloc[:, -1]
 
-    if y.dtype == object:
-        y = y.astype("category").cat.codes
+    # Save feature names
+    feature_names = X.columns.tolist()
 
-    X = X.fillna(X.mean())
-
+    # Standardize features
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 
+    # Train Test Split
     X_train, X_test, y_train, y_test = train_test_split(
-        X_scaled, y, test_size=0.3, random_state=None
+        X_scaled,
+        y,
+        test_size=0.3,
+        random_state=42,
+        stratify=y
     )
 
-    return X_train, X_test, y_train, y_test
-
-
-def evaluate_model(solution, X_train, X_test, y_train, y_test):
-
-    C = float(solution[0])
-
-    model = LogisticRegression(
-        C=C,
-        max_iter=500,
-        solver="liblinear"
-    )
-
-    model.fit(X_train, y_train)
-
-    preds = model.predict(X_test)
-
-    rmse = np.sqrt(mean_squared_error(y_test, preds))
-
-    return rmse
+    return X_train, X_test, y_train, y_test, feature_names

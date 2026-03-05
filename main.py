@@ -1,224 +1,156 @@
-import os
 import numpy as np
 import matplotlib.pyplot as plt
+import seaborn as sns
+import os
 
-from sklearn.metrics import roc_curve, auc
-from sklearn.linear_model import LogisticRegression
-from scipy.stats import ttest_ind
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score, roc_curve, auc, confusion_matrix
 
-from utils import load_preprocess, evaluate_model
-from aco import ACO
+from mealpy.swarm_based import PSO, GWO
+from mealpy.evolutionary_based import GA
+from mealpy.utils.space import FloatVar
 
-
-ITERATIONS = [20, 40]
-RUNS = [20, 40]
-
-DATASETS = {
-    "JM1": "data/jm1.csv",
-    "CM1": "data/cm1.csv"
-}
-
-os.makedirs("results", exist_ok=True)
+from utils import load_preprocess
 
 
-def random_optimizer(iterations, problem):
+# ================================
+# Fitness Function
+# ================================
+def fitness_function(solution):
 
-    best = float("inf")
-    curve = []
+    # Feature selection mask
+    mask = solution > 0.5
 
-    for i in range(iterations):
+    if np.sum(mask) == 0:
+        return 1.0
 
-        sol = np.random.uniform(0.001, 10, 5)
+    X_train_selected = X_train[:, mask]
+    X_test_selected = X_test[:, mask]
 
-        score = problem(sol)
+    model = RandomForestClassifier(n_estimators=100)
 
-        if score < best:
-            best = score
+    model.fit(X_train_selected, y_train)
 
-        curve.append(best)
+    pred = model.predict(X_test_selected)
 
-    return best, curve
+    acc = accuracy_score(y_test, pred)
 
-
-def plot_convergence(curve, name):
-
-    plt.figure()
-    plt.plot(curve)
-    plt.xlabel("Iteration")
-    plt.ylabel("Fitness")
-    plt.title(name)
-    plt.grid()
-
-    plt.savefig(f"results/{name}.png")
-    plt.close()
+    return 1 - acc
 
 
-def plot_boxplot(data, name):
+# ================================
+# Run optimizer
+# ================================
+def run_optimizer(name, optimizer, bounds):
 
-    plt.figure()
-    plt.boxplot(data.values(), labels=data.keys())
+    problem = {
+        "obj_func": fitness_function,
+        "bounds": bounds,
+        "minmax": "min"
+    }
 
-    plt.ylabel("RMSE")
-    plt.title(name)
-    plt.grid()
+    model = optimizer(epoch=20, pop_size=10)
 
-    plt.savefig(f"results/{name}_boxplot.png")
-    plt.close()
+    best = model.solve(problem)
+
+    return best.solution
 
 
-def plot_roc(model, X_test, y_test, name):
+# ================================
+# Plot ROC
+# ================================
+def plot_roc():
 
-    probs = model.predict_proba(X_test)[:, 1]
+    model = RandomForestClassifier(n_estimators=100)
+    model.fit(X_train, y_train)
 
-    fpr, tpr, _ = roc_curve(y_test, probs)
+    prob = model.predict_proba(X_test)[:, 1]
 
+    fpr, tpr, _ = roc_curve(y_test, prob)
     roc_auc = auc(fpr, tpr)
 
-    plt.plot(fpr, tpr, label=f"{name} AUC={roc_auc:.3f}")
+    plt.figure()
+
+    plt.plot(fpr, tpr, label="ROC curve (AUC = %0.2f)" % roc_auc)
+    plt.plot([0, 1], [0, 1], linestyle="--")
+
+    plt.xlabel("False Positive Rate")
+    plt.ylabel("True Positive Rate")
+    plt.title("ROC Curve")
+
+    plt.legend()
+
+    plt.savefig("results/ROC.png")
+    plt.close()
 
 
-def run_optimizer(iterations, runs, problem):
+# ================================
+# Confusion Matrix
+# ================================
+def plot_confusion():
 
-    results = []
-    convergence = None
+    model = RandomForestClassifier(n_estimators=100)
+    model.fit(X_train, y_train)
 
-    for r in range(runs):
+    pred = model.predict(X_test)
 
-        score, curve = random_optimizer(iterations, problem)
+    cm = confusion_matrix(y_test, pred)
 
-        results.append(score)
+    plt.figure()
 
-        if convergence is None:
-            convergence = curve
+    sns.heatmap(cm, annot=True, fmt="d", cmap="Blues")
 
-    return results, convergence
+    plt.title("Confusion Matrix")
+    plt.xlabel("Predicted")
+    plt.ylabel("Actual")
+
+    plt.savefig("results/confusion_matrix.png")
+    plt.close()
 
 
+# ================================
+# MAIN
+# ================================
 def main():
 
-    for dataset, path in DATASETS.items():
+    global X_train, X_test, y_train, y_test
 
-        print("\nDATASET:", dataset)
+    os.makedirs("results", exist_ok=True)
 
-        X_train, X_test, y_train, y_test = load_preprocess(path)
+    datasets = {
+        "JM1": "data/jm1.csv",
+        "CM1": "data/cm1.csv"
+    }
 
-        def problem(solution):
+    for name, path in datasets.items():
 
-            return evaluate_model(
-                solution,
-                X_train,
-                X_test,
-                y_train,
-                y_test
-            )
+        print("\nDATASET:", name)
 
-        for iter_count in ITERATIONS:
-            for run_count in RUNS:
+        X_train, X_test, y_train, y_test, feature_names = load_preprocess(path)
 
-                print("\nIterations:", iter_count, "Runs:", run_count)
+        dim = X_train.shape[1]
 
-                algo_results = {}
+        bounds = FloatVar(
+            lb=(0.0,) * dim,
+            ub=(1.0,) * dim
+        )
 
-                print("Running PSO")
+        print("Running PSO")
+        pso_sol = run_optimizer("PSO", PSO.OriginalPSO, bounds)
 
-                pso_results, pso_conv = run_optimizer(
-                    iter_count,
-                    run_count,
-                    problem
-                )
+        print("Running GA")
+        ga_sol = run_optimizer("GA", GA.BaseGA, bounds)
 
-                algo_results["PSO"] = pso_results
+        print("Running GWO")
+        gwo_sol = run_optimizer("GWO", GWO.OriginalGWO, bounds)
 
-                plot_convergence(
-                    pso_conv,
-                    f"{dataset}_PSO_{iter_count}_{run_count}"
-                )
+        # ROC
+        plot_roc()
 
+        # Confusion matrix
+        plot_confusion()
 
-                print("Running GA")
-
-                ga_results, ga_conv = run_optimizer(
-                    iter_count,
-                    run_count,
-                    problem
-                )
-
-                algo_results["GA"] = ga_results
-
-                plot_convergence(
-                    ga_conv,
-                    f"{dataset}_GA_{iter_count}_{run_count}"
-                )
-
-
-                print("Running GWO")
-
-                gwo_results, gwo_conv = run_optimizer(
-                    iter_count,
-                    run_count,
-                    problem
-                )
-
-                algo_results["GWO"] = gwo_results
-
-                plot_convergence(
-                    gwo_conv,
-                    f"{dataset}_GWO_{iter_count}_{run_count}"
-                )
-
-
-                print("Running ACO")
-
-                aco_results = []
-                aco_conv = None
-
-                for r in range(run_count):
-
-                    aco = ACO(iter_count)
-
-                    sol, score = aco.solve(problem)
-
-                    aco_results.append(score)
-
-                    if aco_conv is None:
-                        aco_conv = aco.history
-
-                algo_results["ACO"] = aco_results
-
-                plot_convergence(
-                    aco_conv,
-                    f"{dataset}_ACO_{iter_count}_{run_count}"
-                )
-
-
-                plot_boxplot(
-                    algo_results,
-                    f"{dataset}_{iter_count}_{run_count}"
-                )
-
-
-                t, p = ttest_ind(pso_results, ga_results)
-
-                print("Statistical Test PSO vs GA p-value:", p)
-
-
-        plt.figure()
-
-        model = LogisticRegression(max_iter=500)
-
-        model.fit(X_train, y_train)
-
-        plot_roc(model, X_test, y_test, "Logistic")
-
-        plt.plot([0, 1], [0, 1], linestyle="--")
-
-        plt.title(f"{dataset} ROC Curve")
-
-        plt.legend()
-
-        plt.savefig(f"results/{dataset}_ROC.png")
-
-        plt.close()
+    print("\nAll experiments finished.")
 
 
 if __name__ == "__main__":
